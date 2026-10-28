@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
@@ -6,7 +7,7 @@ from redis.asyncio import Redis
 from captcha_service.api.errors import register_exception_handlers
 from captcha_service.api.middleware import RequestContextMiddleware
 from captcha_service.api.routes import operations, router
-from captcha_service.application.bootstrap import build_use_cases
+from captcha_service.application.bootstrap import build_expiry_sweeper, build_use_cases
 from captcha_service.core.logging_setup import configure_logging
 from captcha_service.core.settings import Settings
 
@@ -18,9 +19,21 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.redis = redis
     app.state.use_cases = build_use_cases(redis=redis, settings=settings)
+
+    sweeper_task: asyncio.Task | None = None
+    if settings.expiry_sweep_interval_seconds > 0:
+        sweeper = build_expiry_sweeper(redis=redis, settings=settings)
+        sweeper_task = asyncio.create_task(sweeper.run_forever())
+
     try:
         yield
     finally:
+        if sweeper_task is not None:
+            sweeper_task.cancel()
+            try:
+                await sweeper_task
+            except asyncio.CancelledError:
+                pass
         await redis.aclose()
 
 

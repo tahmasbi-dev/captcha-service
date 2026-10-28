@@ -67,7 +67,7 @@ The upshot: **one solved challenge buys exactly one successful verify, plus at m
 
 Everything a client can trigger that mutates state goes through a registered Lua script — Redis runs each atomically, with no other command slipping in between the read and the write:
 
-- **solve** → CAS on the challenge `version` field. Losers get `StaleChallenge` (→ `409`) instead of clobbering.
+- **solve** → one Lua script reads the stored state, compares the answer digest and commits the transition in a single atomic step — there's no read-modify-write window left, so concurrent solvers can't both win and honest callers never see a version race. A solver that lands after the challenge is already solved re-mints a token with no write at all (the aggregate's version doesn't move), so retry storms are free.
 - **verify** → the redeem script above. Checked under fire: 16 simultaneous verifies of one solved challenge produce one `200` and fifteen hard rejections. 50 concurrent saves of a fresh challenge produce exactly one winner.
 
 Read paths (`get`, the expiry lookup) touch nothing mutable, so they can't race.
@@ -82,14 +82,15 @@ Read paths (`get`, the expiry lookup) touch nothing mutable, so they can't race.
       └─ 5 min pass ──────► expired                   (terminal, deleted after TTL)
 ```
 
-Terminal states are final. Each challenge hash carries a Redis TTL of `expires_at + 10 min grace` so expired rows get swept by Redis itself, and a sorted set (`challenge:expiry`) ordered by expiry timestamp is kept for due-for-expiry lookups.
+Terminal states are final. Each challenge hash carries a Redis TTL of `expires_at + 10 min grace` so expired rows get swept by Redis itself, and a sorted set (`challenge:expiry`) ordered by expiry timestamp is kept for due-for-expiry lookups. A background sweeper (default every 60 s, `CAPTCHA_EXPIRY_SWEEP_INTERVAL_SECONDS`) flips overdue issued challenges to expired for real — so the sorted set stays bounded and the expiry transition actually happens rather than being inferable only at read time. Set the interval to 0 to disable it.
 
 ## Endpoints
 
 | Method | Path | Auth | What it does |
 |---|---|---|---|
-| POST | `/v1/challenges` | none | Issue a new challenge. `201` with `challenge_id`, `image` (data URL), `expires_at`. |
-| POST | `/v1/challenges/{id}/solve` | none | Submit `{action, solution}`. `200` + `{token, expires_at}`; `400` wrong answer (burned); `409` not solvable / lost race; `404` unknown. |
+| POST | `/v1/challenges` | none | Issue a new challenge. `201` with `challenge_id`, `image` (data URL), `expires_at`. The same image is also served at `GET /v1/challenges/{id}/image`. |
+| POST | `/v1/challenges/{id}/solve` | none | Submit `{action, solution}`. `200` + `{token, expires_at}`; `400` wrong answer (burned); `409` not solvable; `404` unknown. Solving again on a solved challenge re-mints a token with zero storage writes. |
+| GET | `/v1/challenges/{id}/image` | none | The rendered challenge as raw PNG bytes (content type `image/png`), with an `ETag` (the challenge id) — a matching `If-None-Match` gets `304`. Lighter than the base64 data URL in the create response. |
 | POST | `/v1/internal/verify` | `X-Internal-Key` | Verify + redeem a token. `200` on first use and on its single replay; see above for the rejection codes. |
 | GET | `/v1/health` | none | Liveness with substance: pings Redis, reports whether the Lua scripts are still loaded. `503` when the store is unreachable. |
 | GET | `/metrics` | none | Prometheus scrape endpoint (bound to loopback in dev). Latency per route/status, verify outcomes, solve right/wrong, stale CAS writes, Redis errors, expiry-queue size. |
@@ -106,6 +107,7 @@ Log line format is JSON (one object per line) and every request carries an `X-Re
 | `JWT_SECRET` | required | signing key for solve tokens |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | pinned to IPv4 on purpose — see below |
 | `REDIS_GRACE_SECONDS` | 600 | extra TTL beyond expiry so terminal states stay observable |
+| `EXPIRY_SWEEP_INTERVAL_SECONDS` | 60 | background sweeper cadence; 0 = off |
 | `CHALLENGE_TTL_SECONDS` | 300 | how long a challenge stays solvable |
 | `TOKEN_TTL_SECONDS` | 300 | JWT lifetime after a correct solve |
 | `REDEMPTION_RETENTION_SECONDS` | 120 | how long a verdict stays on file for retries; must be < token TTL |

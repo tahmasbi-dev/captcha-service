@@ -137,3 +137,26 @@ async def metrics(request: Request, redis: RedisDep) -> Response:
     await observability.refresh_expiry_gauge(redis)
     payload, content_type = observability.render_metrics()
     return Response(content=payload, media_type=content_type)
+
+
+@router.get(
+    "/challenges/{challenge_id}/image",
+    response_class=Response,
+    responses={404: _ERRORS[404], 400: _ERRORS[400]},
+    summary="Fetch the rendered challenge image as raw PNG",
+    tags=["captcha"],
+)
+async def challenge_image(
+    challenge_id: str,
+    request: Request,
+    use_cases: UseCasesDep,
+) -> Response:
+    """Raw bytes instead of a base64 data URL — one third lighter and the
+    browser renders it directly. The image is immutable for the life of
+    the challenge, so the challenge id doubles as the ETag and a matching
+    If-None-Match gets a free 304."""
+    payload = await use_cases.get_challenge_image.execute(challenge_id)
+    etag = f'"{challenge_id}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(content=payload, media_type="image/png", headers={"ETag": etag})

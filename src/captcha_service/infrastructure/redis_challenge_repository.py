@@ -7,10 +7,11 @@ from redis.asyncio import Redis
 
 from captcha_service.domain.entities.challenge import Challenge
 from captcha_service.domain.ports.challenge_repository import ChallengeRepository
-from captcha_service.domain.exceptions import StaleChallenge
+from captcha_service.domain.exceptions import DomainError, StaleChallenge
 from captcha_service.domain.value_objects.action import Action
 from captcha_service.domain.value_objects.challenge_id import ChallengeId
 from captcha_service.domain.value_objects.proof import Proof
+from captcha_service.domain.value_objects.solve_outcome import SolveOutcome
 from captcha_service.domain.value_objects.state import State
 
 from captcha_service.infrastructure import observability
@@ -51,6 +52,62 @@ return tonumber(ARGV[2])
 """
 
 
+# One round trip, one decision, one write:
+#
+#   KEYS[1] = challenge:{id}   (hash)
+#   KEYS[2] = challenge:expiry (sorted set)
+#
+#   ARGV[1] = action
+#   ARGV[2] = now (epoch seconds, float)
+#   ARGV[3] = solution sha256 hex (caller-computed; Lua never hashes)
+#   ARGV[4] = burn TTL seconds (post-transition TTL, ~= grace floor)
+#
+#   returns 0  — not found: no stored hash
+#   returns 1  — first correct answer: state -> solved (CAS v -> v+1)
+#   returns 2  — wrong answer / wrong action: state -> failed (CAS v -> v+1)
+#   returns 10 — already solved: NO write, NO version churn (idempotent retry)
+#   returns 20 — stored state already terminal (failed/expired)
+#   returns 30 — was issued but past expires_at: state -> expired (CAS)
+#
+# Note the compare happens on stored VALUES inside the script, so the
+# read-modify-write window that previously spanned two network round
+# trips is gone: no command can slip between load and commit.
+SOLVE_LUA = """
+local parts = redis.call('HMGET', KEYS[1],
+  'id', 'state', 'action', 'solution_hash', 'version',
+  'created_at', 'expires_at', 'expires_at_ts')
+local id, state, action, sha, version = parts[1], parts[2], parts[3], parts[4], parts[5]
+local created_at, expires_at, expires_ts = parts[6], parts[7], parts[8]
+
+if not state then return 0 end
+if state == 'solved' then return 10 end
+if state ~= 'issued' then return 20 end
+
+local function burn(new_state, new_version)
+  redis.call('DEL', KEYS[1])
+  redis.call('HSET', KEYS[1],
+    'id', id, 'state', new_state, 'action', action, 'solution_hash', sha,
+    'created_at', created_at, 'expires_at', expires_at,
+    'expires_at_ts', expires_ts, 'version', tostring(new_version))
+  redis.call('ZREM', KEYS[2], id)     -- terminal states leave the expiry index
+  redis.call('EXPIRE', KEYS[1], ARGV[4])
+end
+
+if tonumber(expires_ts) <= tonumber(ARGV[2]) then
+  burn('expired', tonumber(version) + 1)
+  return 30
+end
+
+if action ~= ARGV[1] or sha ~= ARGV[3] then
+  burn('failed', tonumber(version) + 1)
+  return 2
+end
+
+burn('solved', tonumber(version) + 1)
+return 1
+"""
+
+
 class RedisChallengeRepository(ChallengeRepository):
     def __init__(
         self,
@@ -64,7 +121,9 @@ class RedisChallengeRepository(ChallengeRepository):
         self._prefix = key_prefix
         self._expiry_key = f"{key_prefix}:expiry"
         self._cas = redis.register_script(CAS_SAVE_LUA)
+        self._solve = redis.register_script(SOLVE_LUA)
         observability.register_script_name("challenge_cas_save", CAS_SAVE_LUA)
+        observability.register_script_name("challenge_solve", SOLVE_LUA)
 
     # ---- keys ----
     def _key(self, cid: str | ChallengeId) -> str:
@@ -86,6 +145,9 @@ class RedisChallengeRepository(ChallengeRepository):
             60,  # hard floor: never let a row die before the scheduler can see it
         )
 
+        # expires_at_ts mirrors the expiry zset score as a plain number so
+        # the solve script can compare against wall-clock without parsing
+        # ISO timestamps in Lua.
         fields = [
             "id",             str(challenge.id),
             "state",          challenge.state.value,
@@ -93,6 +155,7 @@ class RedisChallengeRepository(ChallengeRepository):
             "solution_hash",  challenge.proof.solution_hash.hex(),
             "created_at",     challenge.created_at.isoformat(),
             "expires_at",     challenge.expires_at.isoformat(),
+            "expires_at_ts",  str(challenge.expires_at.timestamp()),
             "version",        str(new_version),
         ]
 
@@ -112,6 +175,38 @@ class RedisChallengeRepository(ChallengeRepository):
             observability.record_stale_challenge()   # lost the race, worth counting
             raise StaleChallenge(challenge.id)
         challenge._version = new_version
+
+    async def attempt_solve(
+        self,
+        challenge_id: ChallengeId,
+        action: Action,
+        solution_sha256_hex: str,
+        *,
+        now: datetime,
+    ) -> SolveOutcome:
+        result = await self._solve(
+            keys=[self._key(challenge_id), self._expiry_key],
+            args=[
+                action.value,                       # ARGV[1]
+                str(now.timestamp()),               # ARGV[2]
+                solution_sha256_hex,                # ARGV[3]
+                str(int(self._grace.total_seconds())),   # ARGV[4]: burn TTL
+            ],
+        )
+        code = int(result)
+        if code == 1:
+            return SolveOutcome.SOLVED
+        if code == 2:
+            return SolveOutcome.WRONG
+        if code == 10:
+            return SolveOutcome.ALREADY_SOLVED
+        if code == 20:
+            return SolveOutcome.NOT_SOLVABLE
+        if code == 30:
+            return SolveOutcome.EXPIRED
+        if code == 0:
+            return SolveOutcome.NOT_FOUND
+        raise DomainError(f"unexpected solve result {code}")
 
     async def find_due_for_expiry(
         self,

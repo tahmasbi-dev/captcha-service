@@ -4,7 +4,9 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Sequence
 from captcha_service.domain.entities.challenge import Challenge
+from captcha_service.domain.value_objects.action import Action
 from captcha_service.domain.value_objects.challenge_id import ChallengeId
+from captcha_service.domain.value_objects.solve_outcome import SolveOutcome
 
 
 class ChallengeRepository(ABC):
@@ -65,5 +67,39 @@ class ChallengeRepository(ABC):
 
         ``limit`` is mandatory-by-default to keep scheduler batches
         bounded; callers loop until an empty result.
+        """
+        ...
+
+    @abstractmethod
+    async def attempt_solve(
+        self,
+        challenge_id: ChallengeId,
+        action: Action,
+        solution_sha256_hex: str,
+        *,
+        now: datetime,
+    ) -> SolveOutcome:
+        """Judge one submitted solution in a single atomic store operation.
+
+        The whole load-compare-decide-write sequence must happen with no
+        other command interleaved, so two concurrent solvers of the same
+        challenge cannot both "win" and no honest caller ever sees a
+        version race from a read that went stale mid-request.
+
+        Exactly one of:
+
+        * ``SOLVED`` — first correct answer; the state moved to solved.
+        * ``ALREADY_SOLVED`` — the challenge was already solved; report
+          success again WITHOUT touching storage (no version churn, so
+          idempotent token re-mints cost nothing).
+        * ``WRONG`` — bad solution or wrong action; burned to failed.
+        * ``EXPIRED`` — was still issued past ``expires_at``; expired in place.
+        * ``NOT_SOLVABLE`` — stored state already terminal.
+        * ``NOT_FOUND`` — absent (never existed, TTL'd out, or consumed
+          by redemption).
+
+        ``solution_sha256_hex`` is the digest of the submitted answer,
+        computed by the caller; implementations compare digests, never
+        plaintext solutions.
         """
         ...

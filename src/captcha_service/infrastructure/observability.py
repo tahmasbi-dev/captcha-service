@@ -28,6 +28,10 @@ EXPIRY_QUEUED = Gauge(
     "captcha_challenges_awaiting_expiry",
     "Challenges currently indexed in the expiry sorted set.",
 )
+SWEEP_EXPIRED = Counter(
+    "captcha_challenges_expired_total",
+    "Challenges flipped to expired by the background sweeper.",
+)
 REDEEM_OUTCOMES = Counter(
     "captcha_redeem_outcomes_total",
     "Verify outcomes: new, replay, conflict, not_found.",
@@ -55,6 +59,11 @@ def record_redis_error() -> None:
 
 def record_stale_challenge() -> None:
     STALE_CHALLENGES.inc()
+
+
+def expiries_swept(count: int) -> None:
+    if count:
+        SWEEP_EXPIRED.inc(count)
 
 
 def request_latency(method: str, path_template: str, status: int, seconds: float) -> None:

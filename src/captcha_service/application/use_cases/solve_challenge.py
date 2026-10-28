@@ -1,4 +1,5 @@
 from datetime import timedelta
+import hashlib
 
 from captcha_service.application.dtos.captcha import SolveChallengeCommand, SolveChallengeResult
 from captcha_service.application.exceptions import ChallengeNotFound, InvalidSolution
@@ -7,7 +8,15 @@ from captcha_service.application.ports.metrics import UsageMetrics
 from captcha_service.application.ports.token import TokenClaims, TokenIssuer
 from captcha_service.domain.ports.challenge_repository import ChallengeRepository
 from captcha_service.domain.value_objects.action import Action
+from captcha_service.domain.exceptions import InvalidChallengeState
 from captcha_service.domain.value_objects.challenge_id import ChallengeId
+from captcha_service.domain.value_objects.solve_outcome import SolveOutcome
+
+
+
+def _solution_sha(solution: str) -> str:
+    """Digest of the submitted answer; stores never see plaintext solutions."""
+    return hashlib.sha256(solution.encode("utf-8")).hexdigest()
 
 
 class SolveChallenge:
@@ -30,24 +39,29 @@ class SolveChallenge:
         action = Action.from_str(cmd.action)
         now = self._clock.now()
 
-        challenge = await self._repo.get(cid)
-        if challenge is None:
+        # One atomic store operation decides everything: load, compare
+        # digest, commit the transition. Two concurrent solvers cannot
+        # both win, and no honest caller ever loses a version race.
+        outcome = await self._repo.attempt_solve(
+            cid, action, _solution_sha(cmd.solution), now=now,
+        )
+
+        if outcome is SolveOutcome.NOT_FOUND:
             raise ChallengeNotFound(cid)
+        if outcome in (SolveOutcome.EXPIRED, SolveOutcome.NOT_SOLVABLE):
+            raise InvalidChallengeState(
+                f"challenge {cid} is {outcome.value}; cannot be solved"
+            )
+        if outcome is SolveOutcome.WRONG:
+            self._metrics.record_solve(False)
+            raise InvalidSolution(cid)                     # burned; re-request
 
-        # Domain enforces: sync_state → can_be_solved → matches → solve()/fail()
-        # Raises InvalidChallengeState if expired or already terminal.
-        challenge.accept_solution(action=action, solution=cmd.solution, now=now)
-
-        # Persist the resulting state (SOLVED or FAILED) before issuing anything.
-        # StaleChallenge here means a concurrent solve — bubble up → 409.
-        await self._repo.save(challenge)
-
-        self._metrics.record_solve(challenge.state.is_solved)
-        if not challenge.state.is_solved:
-            raise InvalidSolution(cid)                     # wrong answer, burned
+        # SOLVED and ALREADY_SOLVED both authorize a token. The retry path
+        # is write-free: a caller that got a token but lost the response can
+        # solve again and re-mint without churning the aggregate.
 
         claims = TokenClaims(
-            challenge_id=challenge.id,
+            challenge_id=cid,
             action=action,
             issued_at=now,
             expires_at=now + self._token_ttl,

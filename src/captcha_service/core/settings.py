@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
     redis_grace_seconds: int = 600
 
+    # Seconds between expiry sweeps that flip overdue ISSUED challenges to
+    # expired and keep the expiry sorted set bounded. 0 disables the
+    # sweeper entirely (expiry then relies on Redis TTLs alone).
+    expiry_sweep_interval_seconds: int = 60
+
     # ---- JWT (secret is REQUIRED — no default, fail fast) ----
     jwt_secret: SecretStr
     jwt_issuer: str = "captcha-service"
