@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+.freebuff
+.vscode
+.env
+python-version
+server.log
+server.pid
+**/__pycache__
+**/*.py[oc]
