@@ -1,5 +1,6 @@
 from captcha_service.application.dtos.captcha import VerifyTokenCommand, VerifyTokenResult
 from captcha_service.application.exceptions import ChallengeNotFound, InvalidToken
+from captcha_service.application.ports.metrics import UsageMetrics
 from captcha_service.application.ports.token import TokenVerifier
 from captcha_service.domain.ports.proof_ledger import ProofLedger
 from captcha_service.domain.value_objects.redemption import RedemptionOutcome
@@ -14,9 +15,10 @@ class VerifyToken:
     window replays the recorded verdict instead of failing.
     """
 
-    def __init__(self, verifier: TokenVerifier, ledger: ProofLedger) -> None:
+    def __init__(self, verifier: TokenVerifier, ledger: ProofLedger, metrics: UsageMetrics) -> None:
         self._verifier = verifier
         self._ledger = ledger
+        self._metrics = metrics
 
     async def execute(self, cmd: VerifyTokenCommand) -> VerifyTokenResult:
         claims = self._verifier.verify(cmd.token)          # InvalidToken / ExpiredToken
@@ -34,6 +36,7 @@ class VerifyToken:
         outcome = await self._ledger.redeem(
             claims.challenge_id, claims.action, cmd.token
         )
+        self._metrics.record_redeem(outcome)
         if outcome is RedemptionOutcome.NOT_FOUND:
             raise ChallengeNotFound(claims.challenge_id)   # consumed AND retention gone: dead end
         if outcome is RedemptionOutcome.CONFLICT:

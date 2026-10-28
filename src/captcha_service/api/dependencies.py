@@ -2,6 +2,7 @@ import hmac
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
+from redis.asyncio import Redis
 
 from captcha_service.application.bootstrap import UseCases
 from captcha_service.core.settings import Settings
@@ -15,8 +16,13 @@ def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
+def get_redis(request: Request) -> Redis:
+    return request.app.state.redis
+
+
 UseCasesDep = Annotated[UseCases, Depends(get_use_cases)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+RedisDep = Annotated[Redis, Depends(get_redis)]
 
 
 def require_internal_key(

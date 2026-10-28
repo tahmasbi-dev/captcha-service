@@ -3,6 +3,7 @@ from datetime import timedelta
 from captcha_service.application.dtos.captcha import SolveChallengeCommand, SolveChallengeResult
 from captcha_service.application.exceptions import ChallengeNotFound, InvalidSolution
 from captcha_service.application.ports.clock import Clock
+from captcha_service.application.ports.metrics import UsageMetrics
 from captcha_service.application.ports.token import TokenClaims, TokenIssuer
 from captcha_service.domain.ports.challenge_repository import ChallengeRepository
 from captcha_service.domain.value_objects.action import Action
@@ -16,11 +17,13 @@ class SolveChallenge:
         tokens: TokenIssuer,
         clock: Clock,
         token_ttl: timedelta,
+        metrics: UsageMetrics,
     ) -> None:
         self._repo = repo
         self._tokens = tokens
         self._clock = clock
         self._token_ttl = token_ttl
+        self._metrics = metrics
 
     async def execute(self, cmd: SolveChallengeCommand) -> SolveChallengeResult:
         cid = ChallengeId.from_str(cmd.challenge_id)       # 400 on malformed uuid
@@ -39,6 +42,7 @@ class SolveChallenge:
         # StaleChallenge here means a concurrent solve — bubble up → 409.
         await self._repo.save(challenge)
 
+        self._metrics.record_solve(challenge.state.is_solved)
         if not challenge.state.is_solved:
             raise InvalidSolution(cid)                     # wrong answer, burned
 

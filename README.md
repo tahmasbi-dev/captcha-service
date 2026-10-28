@@ -91,9 +91,12 @@ Terminal states are final. Each challenge hash carries a Redis TTL of `expires_a
 | POST | `/v1/challenges` | none | Issue a new challenge. `201` with `challenge_id`, `image` (data URL), `expires_at`. |
 | POST | `/v1/challenges/{id}/solve` | none | Submit `{action, solution}`. `200` + `{token, expires_at}`; `400` wrong answer (burned); `409` not solvable / lost race; `404` unknown. |
 | POST | `/v1/internal/verify` | `X-Internal-Key` | Verify + redeem a token. `200` on first use and on its single replay; see above for the rejection codes. |
-| GET | `/v1/health` | none | Liveness check. |
+| GET | `/v1/health` | none | Liveness with substance: pings Redis, reports whether the Lua scripts are still loaded. `503` when the store is unreachable. |
+| GET | `/metrics` | none | Prometheus scrape endpoint (bound to loopback in dev). Latency per route/status, verify outcomes, solve right/wrong, stale CAS writes, Redis errors, expiry-queue size. |
 
 Interactive docs at `/docs`.
+
+Log line format is JSON (one object per line) and every request carries an `X-Request-ID` — set `X-Request-ID` on the way in to correlate, or read the minted one from the response header and quote it in a bug report.
 
 ## Configuration (env vars, `CAPTCHA_` prefix)
 

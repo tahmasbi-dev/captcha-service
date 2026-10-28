@@ -11,6 +11,8 @@ from captcha_service.domain.value_objects.action import Action
 from captcha_service.domain.value_objects.challenge_id import ChallengeId
 from captcha_service.domain.value_objects.redemption import RedemptionOutcome
 
+from captcha_service.infrastructure import observability
+
 
 # Single-use redemption, one atomic operation:
 #
@@ -28,7 +30,7 @@ from captcha_service.domain.value_objects.redemption import RedemptionOutcome
 #   returns 1 — NEW: consumed now; verdict recorded, bound to this token
 #   returns 2 — REPLAY: same token retried; record granted once, then deleted
 #   returns 3 — CONFLICT: proof already consumed by a different token
-_REDEEM = """
+REDEEM_LUA = """
 if redis.call('EXISTS', KEYS[3]) == 1 then
   if redis.call('HGET', KEYS[3], 'token_sha') == ARGV[5] then
     redis.call('DEL', KEYS[3])
@@ -78,7 +80,8 @@ class RedisProofLedger(ProofLedger):
         self._prefix = key_prefix
         self._challenge_prefix = challenge_prefix
         self._expiry_key = f"{challenge_prefix}:expiry"
-        self._redeem = redis.register_script(_REDEEM)
+        self._redeem = redis.register_script(REDEEM_LUA)
+        observability.register_script_name("proof_ledger_redeem", REDEEM_LUA)
 
     # ---- ProofLedger ----
     async def redeem(

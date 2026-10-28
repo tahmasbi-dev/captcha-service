@@ -1,8 +1,10 @@
 import base64
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
+from redis.asyncio import Redis
+from starlette.responses import JSONResponse, Response
 
-from captcha_service.api.dependencies import InternalOnly, UseCasesDep
+from captcha_service.api.dependencies import InternalOnly, RedisDep, UseCasesDep
 from captcha_service.api.schemas import (
     ErrorResponse,
     NewChallengeRequest,
@@ -19,7 +21,11 @@ from captcha_service.application.dtos.captcha import (
 )
 
 
+from captcha_service.infrastructure import observability
+
+
 router = APIRouter(prefix="/v1")
+operations = APIRouter()      # health + metrics, outside the /v1 surface
 
 _ERRORS = {
     400: {"model": ErrorResponse, "description": "Bad request (bad token, wrong solution, malformed id)"},
@@ -95,6 +101,39 @@ async def verify_token(
         action=result.action,
     )
 
+@operations.get("/health", include_in_schema=False)
 @router.get("/health", include_in_schema=False)
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health(request: Request, redis: RedisDep) -> Response:
+    """Liveness with substance: pings Redis and reports Lua script state.
+
+    503 when Redis is unreachable — a captcha service without its store
+    cannot do its job, so we fail loud rather than claim ok.
+    """
+    report = await observability.redis_healthcheck(redis)
+    if not report["redis_up"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+                "error": report["error"],
+                "lua_scripts": report["scripts"],
+            },
+        )
+    return JSONResponse(content={
+        "status": "ok",
+        "redis": "up",
+        "lua_scripts": report["scripts"],
+    })
+
+
+@operations.get("/metrics", include_in_schema=False)
+async def metrics(request: Request, redis: RedisDep) -> Response:
+    """Prometheus scrape endpoint.
+
+    Latency histograms, redeem outcomes, solve right/wrong, stale CAS
+    writes, Redis errors, and a fresh read of the expiry-queue size are
+    all stateless instrument reads or one cheap ZCARD.
+    """
+    await observability.refresh_expiry_gauge(redis)
+    payload, content_type = observability.render_metrics()
+    return Response(content=payload, media_type=content_type)

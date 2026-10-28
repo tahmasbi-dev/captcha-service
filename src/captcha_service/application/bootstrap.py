@@ -11,6 +11,7 @@ from captcha_service.core.settings import Settings
 from captcha_service.infrastructure.clock import SystemClock
 from captcha_service.infrastructure.image_captcha_generator import ImageCaptchaGenerator
 from captcha_service.infrastructure.jwt_token_service import JwtTokenService
+from captcha_service.infrastructure.observability import PrometheusUsageMetrics
 from captcha_service.infrastructure.proof_ledger import RedisProofLedger
 from captcha_service.infrastructure.redis_challenge_repository import RedisChallengeRepository
 
@@ -42,6 +43,7 @@ def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
         redis,
         retention_seconds=settings.redemption_retention_seconds,
     )
+    usage_metrics = PrometheusUsageMetrics()
 
     return UseCases(
         get_new_challenge=GetNewChallenge(
@@ -55,6 +57,7 @@ def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
             tokens=tokens,
             clock=clock,
             token_ttl=timedelta(seconds=settings.token_ttl_seconds),
+            metrics=usage_metrics,
         ),
-        verify_token=VerifyToken(verifier=tokens, ledger=ledger),
+        verify_token=VerifyToken(verifier=tokens, ledger=ledger, metrics=usage_metrics),
     )

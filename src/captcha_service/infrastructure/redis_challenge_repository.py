@@ -13,8 +13,10 @@ from captcha_service.domain.value_objects.challenge_id import ChallengeId
 from captcha_service.domain.value_objects.proof import Proof
 from captcha_service.domain.value_objects.state import State
 
+from captcha_service.infrastructure import observability
 
-_CAS_SAVE = """
+
+CAS_SAVE_LUA = """
 -- KEYS[1] = challenge:{id}   (hash)
 -- KEYS[2] = challenge:expiry (sorted set)
 -- ARGV[1] = expected_version (0 = insert)
@@ -61,7 +63,8 @@ class RedisChallengeRepository(ChallengeRepository):
         self._grace = grace
         self._prefix = key_prefix
         self._expiry_key = f"{key_prefix}:expiry"
-        self._cas = redis.register_script(_CAS_SAVE)
+        self._cas = redis.register_script(CAS_SAVE_LUA)
+        observability.register_script_name("challenge_cas_save", CAS_SAVE_LUA)
 
     # ---- keys ----
     def _key(self, cid: str | ChallengeId) -> str:
@@ -106,6 +109,7 @@ class RedisChallengeRepository(ChallengeRepository):
             ],
         )
         if int(result) == 0:
+            observability.record_stale_challenge()   # lost the race, worth counting
             raise StaleChallenge(challenge.id)
         challenge._version = new_version
 
