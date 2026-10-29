@@ -18,6 +18,22 @@ dependencies = [
     "uvicorn[standard]>=0.38.0",
 ]
 
+[dependency-groups]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=1.0.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+log_cli = false
+
+# Redis for integration tests. The dev compose exposes it on loopback;
+# tests use db 1/2 and flush them per session (never the app's db 0).
+
 [project.scripts]
 captcha-service = "captcha_service:main"
 
