@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 import jwt
 
@@ -11,14 +12,45 @@ from captcha_service.domain.value_objects.challenge_id import ChallengeId
 
 
 class JwtTokenService:
+    """Signs and verifies solve tokens.
+
+    Two modes, chosen by settings:
+
+    * HS* - symmetric: the same secret encodes and decodes. Everyone who
+      can verify can also mint. Fine while only this service holds the
+      key.
+    * RS256 / EdDSA - asymmetric: tokens are signed with the private key
+      and verified with the public key. A remote resource server that
+      only verifies holds the public key, so a compromise of that server
+      cannot mint tokens - it can at most present ones it legitimately
+      received.
+
+    Either way, ``verify`` pins the algorithm to the configured one (a
+    list, never a merge) and requires iss/sub/act/iat/exp, which closes
+    the classic ``alg: none`` / alg-confusion holes.
+    """
+
     def __init__(
         self,
         *,
-        secret: bytes,
         issuer: str,
         algorithm: str = "HS256",
+        secret: Optional[bytes] = None,
+        private_key_pem: Optional[str] = None,
+        public_key_pem: Optional[str] = None,
     ) -> None:
-        self._secret = secret
+        if algorithm.startswith("HS"):
+            if secret is None:
+                raise ValueError("HS* algorithms require `secret`")
+            self._signing_key: object = secret
+            self._verifying_key: object = secret
+        else:
+            if private_key_pem is None or public_key_pem is None:
+                raise ValueError(
+                    f"{algorithm} requires both `private_key_pem` and `public_key_pem`"
+                )
+            self._signing_key = private_key_pem
+            self._verifying_key = public_key_pem
         self._issuer = issuer
         self._algorithm = algorithm
 
@@ -31,22 +63,22 @@ class JwtTokenService:
             "iat": int(claims.issued_at.timestamp()),
             "exp": int(claims.expires_at.timestamp()),
         }
-        return jwt.encode(payload, self._secret, algorithm=self._algorithm)
+        return jwt.encode(payload, self._signing_key, algorithm=self._algorithm)
 
     # ---- TokenVerifier ----
     def verify(self, token: str) -> TokenClaims:
         try:
             payload = jwt.decode(
                 token,
-                self._secret,
-                algorithms=[self._algorithm],      # ← MUST be a list; blocks "alg: none"
+                self._verifying_key,
+                algorithms=[self._algorithm],      # MUST be a list; blocks "alg: none" + confusion
                 issuer=self._issuer,
                 options={"require": ["iss", "sub", "act", "iat", "exp"]},
             )
         except jwt.ExpiredSignatureError as exc:
             raise ExpiredToken("token expired") from exc
         except jwt.InvalidTokenError as exc:
-            # Covers: bad signature, wrong issuer, missing claim, malformed base64, alg confusion
+            # Bad signature, wrong issuer, missing claim, malformed base64, alg confusion
             raise InvalidToken(str(exc)) from exc
 
         try:
@@ -57,5 +89,5 @@ class JwtTokenService:
                 expires_at=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
             )
         except (ValueError, TypeError) as exc:
-            # The signature was valid but the payload is malformed — still a bad token.
+            # Signature valid but payload malformed - still a bad token.
             raise InvalidToken(f"malformed claims: {exc}") from exc

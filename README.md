@@ -99,6 +99,15 @@ Interactive docs at `/docs`.
 
 Log line format is JSON (one object per line) and every request carries an `X-Request-ID` — set `X-Request-ID` on the way in to correlate, or read the minted one from the response header and quote it in a bug report.
 
+## Builtin abuse controls
+
+- **Rate limiting per client IP** (token bucket, state kept in the same Redis): issuance burst 15 / sustained 15 per second, solve burst 30 / sustained 10 per second — `CAPTCHA_RATE_LIMIT_*` to tune, `CAPTCHA_RATE_LIMIT_ENABLED=false` to disable. Rejects come back `429` with a `Retry-After` header. The limiter **fails open** on a Redis outage: protecting availability beats protecting the CPU when the store is gone, and the failure is visible in `captcha_redis_errors_total`. Keys bucket by socket peer IP — `X-Forwarded-For` is deliberately ignored; re-point at your trusted proxy header when a proxy is deployed.
+- **Request bodies are capped at 16 KiB** (`413` above that, checked against `Content-Length` before reading, and mid-stream for chunked uploads), and the verify endpoint's challenge id / action / token are length- and format-bounded at the schema layer.
+- **Missing vs wrong `X-Internal-Key` return the identical `401`**, in constant time.
+- **Redis calls carry socket timeouts** (2 s connect/read by default, `CAPTCHA_REDIS_SOCKET_*`), so a wedged Redis stalls requests instead of hanging them.
+
+`docker-compose.prod.yml` is the production-shaped overlay: Redis password required + **no host port mapping at all** (internal network only), `/metrics` and the API reachable behind your own proxy, `volatile-ttl` with AOF persistence, non-root read-only container with dropped capabilities. See [docs/security-hardening.md](docs/security-hardening.md) for the remaining pre-production checklist.
+
 ## Configuration (env vars, `CAPTCHA_` prefix)
 
 | Variable | Default | Notes |
@@ -112,6 +121,12 @@ Log line format is JSON (one object per line) and every request carries an `X-Re
 | `TOKEN_TTL_SECONDS` | 300 | JWT lifetime after a correct solve |
 | `REDEMPTION_RETENTION_SECONDS` | 120 | how long a verdict stays on file for retries; must be < token TTL |
 | `CAPTCHA_LENGTH / WIDTH / HEIGHT` | 6 / 280 / 90 | image dimensions and code length |
+| `RATE_LIMIT_ENABLED` | `true` | per-IP token buckets on public endpoints |
+| `CHALLENGE_RATE_MAX / _PER_SECONDS` | 15 / 15 | issuance bucket size / refill per IP |
+| `SOLVE_RATE_MAX / _PER_SECONDS` | 30 / 10 | solve bucket size / refill per IP |
+| `INTERNAL_API_KEY_PREV` | unset | previous key during a rotation window; while set, both authenticate |
+| `JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM` | unset | with `JWT_ALGORITHM=RS256`/`EdDSA`: asymmetric signing (verifiers hold only the public key and cannot mint) |
+| `REDIS_SOCKET_TIMEOUT / _CONNECT_TIMEOUT` | 2.0 / 2.0 | per-call Redis socket ceilings (seconds) |
 
 About `REDIS_URL`: `localhost` on Windows resolves to both `127.0.0.1` and `::1`. A Redis pool can quietly fill with connections to *two different servers*, and everything atomic suddenly isn't. Hence the explicit IPv4 default.
 

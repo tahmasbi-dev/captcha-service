@@ -1,10 +1,17 @@
 import base64
+from typing import Annotated
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from redis.asyncio import Redis
 from starlette.responses import JSONResponse, Response
 
-from captcha_service.api.dependencies import InternalOnly, RedisDep, UseCasesDep
+from captcha_service.api.dependencies import (
+    InternalOnly,
+    RedisDep,
+    UseCasesDep,
+    limit_challenges,
+    limit_solves,
+)
 from captcha_service.api.schemas import (
     ErrorResponse,
     NewChallengeRequest,
@@ -33,6 +40,7 @@ _ERRORS = {
     404: {"model": ErrorResponse, "description": "Challenge not found"},
     409: {"model": ErrorResponse, "description": "Challenge is in a non-solvable state / concurrent modification"},
     422: {"model": ErrorResponse, "description": "Request validation failed"},
+    429: {"model": ErrorResponse, "description": "Rate limit exceeded (Retry-After header)"},
 }
 
 @router.post(
@@ -46,6 +54,7 @@ _ERRORS = {
 async def create_challenge(
     body: NewChallengeRequest,
     use_cases: UseCasesDep,
+    _: Annotated[None, Depends(limit_challenges)],
 ) -> NewChallengeResponse:
     result = await use_cases.get_new_challenge.execute(
         NewChallengeCommand(action=body.action),
@@ -67,6 +76,7 @@ async def solve_challenge(
     challenge_id: str,
     body: SolveChallengeRequest,
     use_cases: UseCasesDep,
+    _: Annotated[None, Depends(limit_solves)],
 ) -> SolveChallengeResponse:
     result = await use_cases.solve_challenge.execute(
         SolveChallengeCommand(

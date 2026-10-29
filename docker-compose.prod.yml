@@ -1,0 +1,102 @@
+# Production-shaped variant: read after setting the secrets in your real
+# .env (CAPTCHA_INTERNAL_API_KEY / CAPTCHA_JWT_SECRET / REDIS_PASSWORD).
+#
+# Differences from the dev default (docker-compose.yml):
+#
+#   * Redis requires a password (REDIS_PASSWORD is passed straight to
+#     redis-server) and lives on a dedicated internal network with NO
+#     host port mapping at all — it is unreachable from outside the
+#     compose network, password or not.
+#   * The API also has no host port mapping: it is meant to sit behind
+#     your own reverse proxy / load balancer, which joins these
+#     networks and reaches it at `http://api:8000`. If you have no
+#     such proxy, swap its `expose` for a `127.0.0.1`-bound ports
+#     entry rather than a wildcard binding.
+#   * Smaller maxmemory with an eviction policy that WILL NOT evict
+#     live challenge data silently (unlike dev's volatile-lru): all our
+#     keys carry TTLs, so `volatile-ttl` evicts soon-to-die keys first
+#     and under pressure prefers dropping expiring rather than active
+#     state. Tune upward rather than relying on eviction.
+#   * AOF persistence so redemption records survive a Redis restart
+#     within the retention window; dev trades durability for speed.
+#   * healthcheck via authenticated ping, so an unauthenticated
+#     connection can't wedge the container as healthy.
+#   * no_container_new_privileges, read_only rootfs, tmpfs for /tmp,
+#     non-root user, dropped capabilities — container hardening that
+#     costs nothing.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# or with the override replacing rather than stacking:
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  redis:
+    image: redis:latest
+    container_name: captcha-redis-prod
+    # No `ports:` at all — Redis is only reachable from the internal network.
+    networks:
+      - internal
+    command:
+      [
+        "sh",
+        "-c",
+        "exec redis-server --maxmemory 256mb --maxmemory-policy volatile-ttl --save \"\" --appendonly yes --requirepass \"$$REDIS_PASSWORD\" --loglevel notice",
+      ]
+    environment:
+      REDIS_PASSWORD: ${CAPTCHA_REDIS_PASSWORD:?set CAPTCHA_REDIS_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: captcha-api-prod
+    # No `ports:`; a reverse proxy on the same network reaches api:8000.
+    networks:
+      - internal
+      - edge
+    expose:
+      - "8000"
+    env_file: .env
+    environment:
+      # URL templating is done through an entrypoint-capable shell rather
+      # than compose substitution inside environment, so the password
+      # never appears in `docker inspect` of the api container.
+      CAPTCHA_REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${CAPTCHA_REDIS_PASSWORD:?set CAPTCHA_REDIS_PASSWORD in .env}
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "export CAPTCHA_REDIS_URL=\"redis://:$${REDIS_PASSWORD}@redis:6379/0\"; exec \"$$@\"",
+        "--",
+      ]
+    command: ["/app/.venv/bin/uvicorn", "captcha_service.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  internal:
+    internal: true    # no outbound internet; Redis side can't be exfiltrated to
+  edge:
+    driver: bridge

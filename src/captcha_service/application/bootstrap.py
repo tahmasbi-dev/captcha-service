@@ -1,6 +1,7 @@
 # application/bootstrap.py
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Optional
 
 from redis.asyncio import Redis
 
@@ -15,6 +16,7 @@ from captcha_service.infrastructure.image_captcha_generator import ImageCaptchaG
 from captcha_service.infrastructure.jwt_token_service import JwtTokenService
 from captcha_service.infrastructure.observability import PrometheusUsageMetrics
 from captcha_service.infrastructure.proof_ledger import RedisProofLedger
+from captcha_service.infrastructure.rate_limiter import RedisTokenBucketLimiter
 from captcha_service.infrastructure.redis_challenge_images import RedisChallengeImageStore
 from captcha_service.infrastructure.redis_challenge_repository import RedisChallengeRepository
 
@@ -25,6 +27,39 @@ class UseCases:
     solve_challenge: SolveChallenge
     verify_token: VerifyToken
     get_challenge_image: GetChallengeImage
+
+
+@dataclass(frozen=True, slots=True)
+class Limiters:
+    """Token-bucket policies, one per public endpoint class.
+
+    Issuance is capped tighter than solving: a render costs CPU on us,
+    a solve costs one Lua call. Verify stays internal-key only, so it
+    gets no public bucket.
+    """
+
+    challenges: Optional[RedisTokenBucketLimiter]
+    solves: Optional[RedisTokenBucketLimiter]
+
+
+def build_limiters(*, redis: Redis, settings: Settings) -> Limiters:
+    """Token buckets share the request Redis pool; KeyError-free on rebuild."""
+    if not settings.rate_limit_enabled:
+        return Limiters(challenges=None, solves=None)
+    return Limiters(
+        challenges=RedisTokenBucketLimiter(
+            name="challenges",
+            capacity=settings.challenge_rate_max,
+            refill_per_second=settings.challenge_rate_per_seconds,
+            redis=redis,
+        ),
+        solves=RedisTokenBucketLimiter(
+            name="solves",
+            capacity=settings.solve_rate_max,
+            refill_per_second=settings.solve_rate_per_seconds,
+            redis=redis,
+        ),
+    )
 
 
 def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
@@ -38,11 +73,19 @@ def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
         length=settings.captcha_length,
     )
     clock = SystemClock()
-    tokens = JwtTokenService(
-        secret=settings.jwt_secret.get_secret_value().encode(),
-        issuer=settings.jwt_issuer,
-        algorithm=settings.jwt_algorithm,
-    )
+    if settings.jwt_algorithm.startswith("HS"):
+        tokens = JwtTokenService(
+            secret=settings.jwt_secret.get_secret_value().encode(),
+            issuer=settings.jwt_issuer,
+            algorithm=settings.jwt_algorithm,
+        )
+    else:
+        tokens = JwtTokenService(
+            issuer=settings.jwt_issuer,
+            algorithm=settings.jwt_algorithm,
+            private_key_pem=settings.jwt_private_key_pem.get_secret_value(),
+            public_key_pem=settings.jwt_public_key_pem.get_secret_value(),
+        )
     ledger = RedisProofLedger(
         redis,
         retention_seconds=settings.redemption_retention_seconds,

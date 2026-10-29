@@ -1,0 +1,22 @@
+# Local secret-safety net. Install once, then it runs on every commit:
+#   pip install pre-commit && pre-commit install
+# The hook refuses any commit that would track .env / key files or that
+# contains a private-key block / obviously-hardcoded secret. Waiver
+# format is in tools/check_no_secrets.py.
+repos:
+  - repo: local
+    hooks:
+      - id: no-secrets
+        name: refuse staged secret material
+        entry: python tools/check_no_secrets.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: forbid-dotenv-real
+        name: never track real env files
+        entry: git diff --cached --name-only --diff-filter=ACMR
+        language: system
+        pass_filenames: false
+        always_run: false
+        files: '^\.env(\..+)?$'
+        exclude: '^\.env\.sample$'

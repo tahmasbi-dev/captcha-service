@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from captcha_service.api.body_limit import _BodyTooLargeError
 from captcha_service.application.exceptions import (
     ChallengeNotFound,
     ExpiredToken,
@@ -67,6 +68,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(InvalidChallengeState)
     async def _(request: Request, exc: InvalidChallengeState) -> JSONResponse:
         return JSONResponse(status_code=409, content=_body("invalid_state", str(exc)))
+
+    @app.exception_handler(_BodyTooLargeError)
+    async def _body_too_large(request: Request, exc: _BodyTooLargeError) -> JSONResponse:
+        return JSONResponse(
+            status_code=413,
+            content=_body("payload_too_large", "request body exceeds the allowed size"),
+        )
 
     @app.exception_handler(DomainError)
     async def _(request: Request, exc: DomainError) -> JSONResponse:
