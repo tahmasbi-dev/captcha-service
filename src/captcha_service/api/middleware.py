@@ -16,10 +16,11 @@ log = logging.getLogger("captcha_service.request")
 
 
 def _path_label(scope: dict) -> str:
-    """Route template keeps the cardinality of the histogram bounded.
+    """Use the route template as the histogram label, not the raw path.
 
-    Falls back to a fixed 'unmatched' label for 404s and errors that
-    never reach routing — raw client paths would multiply label series.
+    Raw client paths would explode the label cardinality (404s, junk
+    paths, ids), so anything that never reached routing is just
+    'unmatched'.
     """
     route = scope.get("route")
     return route.path if route is not None else "unmatched"
@@ -28,13 +29,12 @@ def _path_label(scope: dict) -> str:
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """One request id, one latency sample, one access-log line, per request.
 
-    - Honours an incoming X-Request-ID (callers behind a proxy usually
-      already set one); mints a 32-hex id otherwise. The response echoes
-      it back so a client can quote it in a report.
-    - Every request lands in the latency histogram, incl. handled
-      exceptions (their responses still flow through here).
-    - Redis failures are counted centrally; anything else unexpected is
-      logged with a traceback and re-raised for the 500.
+    An incoming X-Request-ID is reused (proxies in front of us usually
+    set one); otherwise a 32-hex id is minted, and the response echoes
+    it back so callers can quote it in bug reports. Every request
+    lands in the latency histogram, including ones that raise on the
+    way out. Redis failures are counted centrally; anything else
+    unexpected gets a traceback in the log and is re-raised for the 500.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:

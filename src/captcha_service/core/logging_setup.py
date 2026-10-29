@@ -4,9 +4,10 @@ import sys
 from contextvars import ContextVar
 from datetime import datetime, timezone
 
-# Every log line emitted while handling a request carries its request id.
-# Middleware sets it from the incoming X-Request-ID header (or mints one),
-# and the response echoes it back so clients can quote it in bug reports.
+# The request id rides along on every log line emitted while handling a
+# request. The middleware picks it up from the X-Request-ID header (or
+# mints one) and the response sends it back, so clients can quote it
+# in bug reports.
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 _RESERVED_ATTRS = frozenset({

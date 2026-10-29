@@ -30,8 +30,8 @@ class GetNewChallenge:
     async def execute(self, cmd: NewChallengeCommand) -> NewChallengeResult:
         action = Action.from_str(cmd.action)               # 400 on bad action
 
-        # Pillow rendering is CPU-bound: keep it off the event loop so a
-        # burst of issuances can't stall every other request.
+        # Pillow rendering is CPU-bound, so push it off the event loop;
+        # otherwise a burst of issuances stalls every other request.
         solution = await asyncio.to_thread(self._captcha.generate)
         challenge = Challenge.issue(
             action=action,
@@ -41,8 +41,8 @@ class GetNewChallenge:
         )
         await self._repo.save(challenge)
 
-        # Persist the rendered image so GET /challenges/{id}/image can
-        # serve raw PNG without any re-render; dies with the challenge TTL.
+        # Save the rendered image so the image endpoint can serve raw PNG
+        # without re-rendering. Its key dies with the challenge TTL.
         payload = await asyncio.to_thread(self._captcha.render, solution)
         await self._images.save(challenge.id, payload, int(self._image_ttl.total_seconds()))
 

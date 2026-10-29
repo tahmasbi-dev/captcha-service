@@ -71,14 +71,14 @@ class JwtTokenService:
             payload = jwt.decode(
                 token,
                 self._verifying_key,
-                algorithms=[self._algorithm],      # MUST be a list; blocks "alg: none" + confusion
+                algorithms=[self._algorithm],      # list, never a string: keeps alg confusion closed
                 issuer=self._issuer,
                 options={"require": ["iss", "sub", "act", "iat", "exp"]},
             )
         except jwt.ExpiredSignatureError as exc:
             raise ExpiredToken("token expired") from exc
         except jwt.InvalidTokenError as exc:
-            # Bad signature, wrong issuer, missing claim, malformed base64, alg confusion
+            # bad signature, wrong issuer, missing claim, junk base64, all of it
             raise InvalidToken(str(exc)) from exc
 
         try:
@@ -89,5 +89,5 @@ class JwtTokenService:
                 expires_at=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
             )
         except (ValueError, TypeError) as exc:
-            # Signature valid but payload malformed - still a bad token.
+            # signature checked out, but the payload is junk to us
             raise InvalidToken(f"malformed claims: {exc}") from exc

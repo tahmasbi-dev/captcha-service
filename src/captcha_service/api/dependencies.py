@@ -29,15 +29,17 @@ def require_internal_key(
     settings: SettingsDep,
     x_internal_key: Annotated[Optional[str], Header(alias="X-Internal-Key")] = None,
 ) -> None:
-    # Rotation window: while internal_api_key_prev is set, both keys
-    # authenticate. Redeploy callers onto the new key, then clear the
-    # old one — overlap means no downtime from key rotation.
+    # While internal_api_key_prev is set, both the current and the old
+    # key authenticate. Move callers over to the new key first, then
+    # clear the old one; rotating with this overlap avoids a redeploy
+    # window where both sides disagree.
     accepted = [settings.internal_api_key.get_secret_value()]
     if settings.internal_api_key_prev is not None:
         accepted.append(settings.internal_api_key_prev.get_secret_value())
-    presented = x_internal_key if x_internal_key is not None else "\x00missing\x00"  # never valid
+    presented = x_internal_key if x_internal_key is not None else "\x00missing\x00"  # can never match
     if not any(hmac.compare_digest(presented, k) for k in accepted):
-        # Same response for "wrong key" and "missing key" — don't help attackers.
+        # Wrong key and missing key get the same response on purpose.
+        # Details leak would only help whoever is guessing.
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
 
 
@@ -46,10 +48,9 @@ InternalOnly = Depends(require_internal_key)
 
 # ---- per-IP rate limiting on the public endpoints --------------------------
 #
-# Buckets live in Redis (the same client everything else uses), so a
-# cluster of workers enforces one shared budget per client rather than
-# one per process. These throw 429 with a Retry-After when the bucket
-# is empty.
+# The buckets live in Redis, on the same client everything else uses,
+# so workers share one budget per client instead of each getting their
+# own. Empty bucket -> 429 with Retry-After.
 
 from captcha_service.application.bootstrap import Limiters  # noqa: E402
 
@@ -62,13 +63,13 @@ LimitersDep = Annotated[Limiters, Depends(get_limiters)]
 
 
 async def limit_challenges(request: Request, limiters: LimitersDep) -> None:
-    """429 gate on POST /challenges — the CPU-heavy endpoint."""
+    """429 gate on POST /challenges, the CPU-heavy endpoint."""
     if limiters.challenges is not None:
         await limiters.challenges.check(request)
 
 
 async def limit_solves(request: Request, limiters: LimitersDep) -> None:
-    """429 gate on POST /solve — cheap per call, but brute-force fuel."""
+    """429 gate on POST /solve. Cheap per call, but brute-force fuel."""
     if limiters.solves is not None:
         await limiters.solves.check(request)
 

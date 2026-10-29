@@ -1,9 +1,9 @@
 """Conftest for integration + e2e tests.
 
-Integration tests share the dev compose Redis on loopback. They use
-database 1 for adapter tests and database 2 for HTTP e2e, and flush
-those dbs per session — the running app keeps its data in db 0, which
-is never touched by tests.
+Integration tests share the dev compose Redis on loopback: database 1
+for adapter tests, database 2 for the HTTP e2e ones, with those dbs
+flushed per session. The running app keeps its data in db 0, which
+the tests never touch.
 """
 import os
 from collections.abc import AsyncIterator

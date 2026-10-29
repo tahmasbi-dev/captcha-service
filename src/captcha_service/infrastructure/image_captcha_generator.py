@@ -19,7 +19,7 @@ class ImageCaptchaGenerator(CaptchaGenerator):
         fonts: list[str] | None = None,
         length: int = 6,
     ) -> None:
-        # Fonts load here, once. Construct at the composition root.
+        # fonts load once here. Construct at the composition root.
         self._image = ImageCaptcha(width=width, height=height, fonts=fonts)
         self._length = length
 
@@ -28,4 +28,4 @@ class ImageCaptchaGenerator(CaptchaGenerator):
 
     def render(self, solution: str) -> bytes:
         buf: io.BytesIO = self._image.generate(solution, format="png")
-        return buf.getvalue()          # .getvalue() — never return the BytesIO
+        return buf.getvalue()          # plain bytes, not the BytesIO

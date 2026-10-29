@@ -32,7 +32,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InvalidSolution)
     async def _(request: Request, exc: InvalidSolution) -> JSONResponse:
-        # The challenge is already FAILED in storage; the client must re-request.
+        # Storage already has this challenge as FAILED, so there is no
+        # point retrying with the same id.
         return JSONResponse(
             status_code=400,
             content=_body(
@@ -59,7 +60,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StaleChallenge)
     async def _(request: Request, exc: StaleChallenge) -> JSONResponse:
-        # Concurrent mutation lost the CAS race. Client may retry with a fresh challenge.
+        # Someone else won the CAS race and the stored row moved on.
+        # Retrying the same id won't help; ask for a fresh challenge.
         return JSONResponse(
             status_code=409,
             content=_body("stale_challenge", "challenge was modified concurrently; request a new one"),
@@ -78,6 +80,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(DomainError)
     async def _(request: Request, exc: DomainError) -> JSONResponse:
-        # Catch-all: a DomainError we didn't map explicitly = a bug we need to see.
+        # Anything that gets here is a domain error we forgot to map,
+        # which is a bug, so make sure it shows up in the logs.
         log.exception("unmapped domain error", exc_info=exc)
         return JSONResponse(status_code=422, content=_body("domain_error", str(exc)))

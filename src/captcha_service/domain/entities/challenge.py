@@ -66,12 +66,13 @@ class Challenge:
         return self._state.is_issued and now >= self._expires_at
 
     def effective_state(self, now: datetime) -> State:
-        """State as of `now`, computed but not persisted. For read paths only."""
+        """State as of `now`, computed on the fly and not persisted.
+        For read paths only."""
         return State.expired() if self.should_expire(now) else self._state
 
     # transitions
     def sync_state(self, now: datetime) -> None:
-        """Reconcile `_state` with wall-clock. Idempotent; no-op if not stale."""
+        """Reconcile `_state` with the clock. Idempotent, no-op if current."""
         if self.should_expire(now):
             self._state = self._state.expire()
 
@@ -91,7 +92,7 @@ class Challenge:
         self.sync_state(now)
 
         if self._state.is_solved:
-            return                                   # idempotent client retry
+            return                                   # replay of a client retry
 
         if not self._state.can_be_solved:
             raise InvalidChallengeState(
@@ -99,7 +100,8 @@ class Challenge:
             )
 
         if not self._proof.matches(action=action, solution=solution):
-            self._state = self._state.fail()          # terminal on wrong answer
+            # a wrong answer spends the challenge for good
+            self._state = self._state.fail()
             return
 
         self._state = self._state.solve()

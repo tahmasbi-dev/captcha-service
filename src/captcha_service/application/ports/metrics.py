@@ -4,10 +4,10 @@ from captcha_service.domain.value_objects.redemption import RedemptionOutcome
 
 
 class UsageMetrics(ABC):
-    """Business-level counters the use cases emit as things happen.
+    """Business counters that use cases bump as things happen.
 
-    The infra implementation turns these into Prometheus counters; the
-    use cases only know the port, never the exporter.
+    The infra side turns these into Prometheus counters. The use cases
+    only ever see this port, never the exporter behind it.
     """
 
     @abstractmethod
@@ -17,5 +17,5 @@ class UsageMetrics(ABC):
 
     @abstractmethod
     def record_solve(self, solved: bool) -> None:
-        """A submitted solution was judged right (solved) or wrong (burned)."""
+        """A submitted solution was judged right or wrong (and spent)."""
         ...

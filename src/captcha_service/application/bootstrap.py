@@ -33,9 +33,9 @@ class UseCases:
 class Limiters:
     """Token-bucket policies, one per public endpoint class.
 
-    Issuance is capped tighter than solving: a render costs CPU on us,
-    a solve costs one Lua call. Verify stays internal-key only, so it
-    gets no public bucket.
+    Issuance gets the tighter cap since rendering is CPU work on our
+    side; a solve is just one Lua call. Verify is internal-key only
+    and has no public bucket.
     """
 
     challenges: Optional[RedisTokenBucketLimiter]
@@ -43,7 +43,7 @@ class Limiters:
 
 
 def build_limiters(*, redis: Redis, settings: Settings) -> Limiters:
-    """Token buckets share the request Redis pool; KeyError-free on rebuild."""
+    """Token buckets share the request Redis pool. Safe to rebuild."""
     if not settings.rate_limit_enabled:
         return Limiters(challenges=None, solves=None)
     return Limiters(
@@ -93,8 +93,8 @@ def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
     images = RedisChallengeImageStore(redis)
     usage_metrics = PrometheusUsageMetrics()
 
-    # Image bytes must survive as long as the challenge itself: TTL +
-    # grace, the same window the challenge hash gets.
+    # The image should live as long as the challenge hash does: the
+    # challenge TTL plus the grace window.
     image_ttl = timedelta(
         seconds=settings.challenge_ttl_seconds + settings.redis_grace_seconds,
     )
@@ -121,10 +121,10 @@ def build_use_cases(*, redis: Redis, settings: Settings) -> UseCases:
 
 
 def build_expiry_sweeper(*, redis: Redis, settings: Settings) -> ExpirySweeper:
-    """Own repo/clock instances; the sweeper runs its own loop.
+    """The sweeper runs its own loop on its own repo/clock instances.
 
-    A second repository instance is a couple of objects and a shared
-    script set - everything it needs already lives on the pool.
+    An extra repository instance is just a couple of objects plus the
+    script cache, which lives on the shared pool anyway.
     """
     return ExpirySweeper(
         repo=RedisChallengeRepository(

@@ -76,8 +76,9 @@ def render_metrics() -> tuple[bytes, str]:
 
 
 # ---- health bookkeeping ----------------------------------------------------
-# The Lua scripts live as module constants in their adapters; the SHAs must
-# match what register_script computes (plain sha1 over the source text).
+# Lua scripts live as module constants in their adapters; the SHAs here
+# must match what register_script computes, i.e. a plain sha1 of the
+# source text.
 _SCRIPTS: dict[str, str] = {}
 
 
@@ -86,11 +87,11 @@ def register_script_name(name: str, source: str) -> None:
 
 
 async def refresh_expiry_gauge(redis: Redis) -> None:
-    """Snapshot how many challenges still sit in the expiry index.
+    """Snapshot how many challenges are still waiting in the expiry index.
 
-    Called by the metrics endpoint right before rendering, so Prometheus
-    scrapes carry a fresh value. A Redis failure leaves the last known
-    gauge in place and the error shows up in redis_errors_total.
+    The metrics endpoint calls this just before rendering, so each
+    Prometheus scrape carries a fresh number. If Redis is down the
+    gauge keeps its last value and the failure lands in redis_errors_total.
     """
     try:
         EXPIRY_QUEUED.set(await redis.zcard("challenge:expiry"))
@@ -99,11 +100,12 @@ async def refresh_expiry_gauge(redis: Redis) -> None:
 
 
 async def redis_healthcheck(redis: Redis) -> dict:
-    """Ping Redis and confirm the registered scripts are still cached.
+    """Ping Redis and check the registered scripts are still cached.
 
-    A missing script is not fatal (asyncio Script objects reload on
-    NOSCRIPT) but its absence means this Redis was wiped recently or
-    points somewhere else — worth surfacing in the health output.
+    A missing script doesn't have to be fatal (asyncio Script objects
+    reload themselves when Redis says NOSCRIPT), but it tells you the
+    Redis was recently wiped or points somewhere else, so the health
+    output says so.
     """
     try:
         await redis.ping()

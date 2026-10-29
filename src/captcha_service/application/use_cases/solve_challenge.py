@@ -39,9 +39,9 @@ class SolveChallenge:
         action = Action.from_str(cmd.action)
         now = self._clock.now()
 
-        # One atomic store operation decides everything: load, compare
-        # digest, commit the transition. Two concurrent solvers cannot
-        # both win, and no honest caller ever loses a version race.
+        # The store judges the answer in a single atomic operation, so
+        # two concurrent solvers can't both win and honest callers
+        # never see a version race.
         outcome = await self._repo.attempt_solve(
             cid, action, _solution_sha(cmd.solution), now=now,
         )
@@ -54,11 +54,11 @@ class SolveChallenge:
             )
         if outcome is SolveOutcome.WRONG:
             self._metrics.record_solve(False)
-            raise InvalidSolution(cid)                     # burned; re-request
+            raise InvalidSolution(cid)                     # challenge is spent, ask for a new one
 
-        # SOLVED and ALREADY_SOLVED both authorize a token. The retry path
-        # is write-free: a caller that got a token but lost the response can
-        # solve again and re-mint without churning the aggregate.
+        # Both SOLVED and ALREADY_SOLVED authorize a token. The retry
+        # path writes nothing: a caller that won a token but dropped the
+        # response can solve again and re-mint without touching storage.
 
         claims = TokenClaims(
             challenge_id=cid,

@@ -15,7 +15,7 @@ from captcha_service.core.settings import Settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings()                                       # fails fast if missing
+    settings = Settings()                                       # refuses to boot on missing secrets
     redis = Redis.from_url(
         settings.redis_url,
         decode_responses=True,

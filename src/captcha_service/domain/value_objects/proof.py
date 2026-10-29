@@ -40,7 +40,7 @@ class Proof:
         return cls(action=action, solution_hash=digest)
 
     def matches(self, *, action: Action, solution: str) -> bool:
-        """True iff both action and solution match the commitment."""
+        """True when both the action and the solution match the commitment."""
         if self.action != action:
             return False
         candidate = hashlib.sha256(solution.encode("utf-8")).digest()

@@ -15,16 +15,15 @@ log = logging.getLogger(__name__)
 class ExpirySweeper:
     """Background loop that flips overdue ISSUED challenges to expired.
 
-    Without this, expired challenges only leave Redis via their TTL
-    (expires_at + grace) and the challenge:expiry sorted set never
-    shrinks on its own — it is only cleaned as a side effect of
-    find_due_for_expiry. Sweeping gives us real expiry bookkeeping:
-    state transitions actually happen, terminal rows drop out of the
-    index immediately by way of the normal CAS save, and orphans get
-    removed.
+    Without this, an expired challenge only leaves Redis via its TTL
+    (expires_at + grace) and the challenge:expiry set never shrinks by
+    itself, it just gets pruned as a side effect of find_due_for_expiry.
+    Sweeping makes expiry real: transitions actually happen, terminal
+    rows drop out of the index through the normal CAS save, and
+    orphaned index entries get removed.
 
-    Redis failures are logged and counted, then the loop simply tries
-    again next tick — a transient outage must not kill the sweeper.
+    Redis failures are logged and counted and the loop tries again
+    next tick; a transient outage shouldn't be able to kill the sweeper.
     """
 
     def __init__(
@@ -40,7 +39,7 @@ class ExpirySweeper:
         self._batch_limit = batch_limit
 
     async def sweep_once(self) -> int:
-        """Expire every due challenge in one bounded batch. Returns count."""
+        """Expire every due challenge in one bounded batch, return the count."""
         now = self._clock.now()
         due = await self._repo.find_due_for_expiry(now, limit=self._batch_limit)
         expired = 0
@@ -50,8 +49,8 @@ class ExpirySweeper:
                 await self._repo.save(challenge)
                 expired += 1
             except StaleChallenge:
-                # Another writer (solver/redeemer) moved it first; it was
-                # not issuable anyway. Nothing to do.
+                # A solver or a redeemer got to it first. Either way the
+                # challenge is no longer issuable, nothing to do.
                 continue
         observability.expiries_swept(expired)
         return expired

@@ -36,9 +36,9 @@ class RateLimitPolicy:
     per_seconds: int
 
 
-# One shared Lua script: the whole bucket check-and-decrement is a single
-# Redis operation, so N workers against one Redis still enforce one
-# bucket per (policy, ip) — no cross-process races.
+# One shared Lua script, and it does both the check and the
+# decrement, so N workers talking to one Redis still share one bucket
+# per (policy, ip) with no cross-process races.
 #
 #   KEYS[1] = <policy>:<ip>
 #   ARGV[1] = capacity          ARGV[2] = refill per second
@@ -82,12 +82,12 @@ return {allowed, tokens, retry_after}
 
 
 def client_ip(request: Request) -> str:
-    """The socket peer, deliberately NOT X-Forwarded-For.
+    """The socket peer, deliberately not the X-Forwarded-For header.
 
-    A public endpoint trusting an attacker-set header hands every
-    anonymous client an unlimited supply of buckets. When a real proxy
-    is deployed, that proxy normalizes/strips XFF and sets its own
-    header; switch to it here, not to raw XFF.
+    Trusting an attacker-set header on a public endpoint means every
+    anonymous client mints its own buckets for free. Once there is a
+    real proxy in front, switch to the header the proxy sets, not to
+    raw XFF.
     """
     if request.client is None or not request.client.host:
         return "unknown"
@@ -98,11 +98,11 @@ class RedisTokenBucketLimiter:
     """Per-IP token buckets backed by the redis we already use.
 
     One instance per endpoint policy. Buckets live in short-TTL keys
-    (`<name>:{ip}`), so idle clients cost nothing and a restart forgets
-    only who was near their limit. A Redis outage fails the limiter
-    *open* — availability first for a captcha service whose whole job
-    is to not be the reason login breaks — and the failure is counted
-    in the redis_errors metric like any other.
+    (`<name>:{ip}`), so idle clients cost nothing and a restart only
+    forgets who was close to their limit. When Redis is down the
+    limiter fails open: availability first, a captcha shouldn't be the
+    thing that breaks login. The failure is still counted in
+    redis_errors like any other.
     """
 
     def __init__(
@@ -120,7 +120,7 @@ class RedisTokenBucketLimiter:
         self._bucket = redis.register_script(_TOKEN_BUCKET) if redis is not None else None
 
     def bind(self, redis: Redis) -> "RedisTokenBucketLimiter":
-        """Attach the live client (routes get it via Depends())."""
+        """Attach the live client (routes get theirs via Depends())."""
         if self._redis is redis:
             return self
         clone = RedisTokenBucketLimiter(
@@ -135,7 +135,7 @@ class RedisTokenBucketLimiter:
         limiter = self
         redis = self._redis
         if redis is None:
-            # Not bound yet — pull the app-level client lazily.
+            # Not bound yet, so pull the app-level client lazily.
             redis = limiter._redis or request.app.state.redis
             limiter = RedisTokenBucketLimiter(
                 name=self._name,
@@ -149,8 +149,8 @@ class RedisTokenBucketLimiter:
                 args=[limiter._capacity, limiter._refill, time.time(), cost],
             )
         except Exception:
-            # Metric it, log it, and let the request through: the limiter
-            # must never be the single point that takes the service down.
+            # Count it, log it, let the request through. The limiter
+            # must not be the thing that can take the whole service down.
             observability.record_redis_error()
             log.exception("rate limiter redis failure; failing open")
             return None

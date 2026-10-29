@@ -11,15 +11,15 @@ from captcha_service.domain.value_objects.challenge_id import ChallengeId
 class RedisChallengeImageStore(ChallengeImageStore):
     """Rendered PNGs live in their own keys, TTL'd alongside the challenge.
 
-    Deliberately NOT inside the challenge hash: the solve path reads the
-    hash with HGETALL and must not pay for ~10 KB of image bytes it
-    never uses. These keys die on their own TTL, so redemption needs no
-    extra deletion, and burning/failed states don't touch them either.
+    Not inside the challenge hash on purpose: the solve path reads the
+    hash with HGETALL and shouldn't carry ~10 KB of image bytes it
+    will never use. These keys expire on their own, so redeeming or
+    failing a challenge needs no explicit cleanup here.
 
-    The bytes go in base64-encoded because the shared Redis client
-    decodes responses as text (utf-8 with replacement) — raw payload
-    bytes would not survive a round trip through TEXT decoding, while
-    base64 is guaranteed lossless. The 25% overhead is off the hot path.
+    The payload is base64 rather than raw bytes because the shared
+    Redis client decodes as text, and raw image bytes would get
+    mangled by utf-8 decoding. Base64 round-trips lossless; the 25%
+    overhead lives off the hot path.
     """
 
     def __init__(self, redis: Redis, *, key_prefix: str = "challenge:image") -> None:

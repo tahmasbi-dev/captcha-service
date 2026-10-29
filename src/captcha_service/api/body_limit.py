@@ -9,19 +9,19 @@ from starlette.responses import Response
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_MAX_BODY_BYTES = 16 * 1024  # 16 KiB: generous for captcha payloads
+_DEFAULT_MAX_BODY_BYTES = 16 * 1024  # 16 KiB, plenty for these payloads
 
 
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
     """Reject request bodies above a small ceiling with 413.
 
-    Every endpoint here takes at most a few hundred bytes (a 6-char
-    solution, a JWT, an action name). Anything larger is not a real
-    client — with no ceiling, any caller can hand uvicorn an
-    arbitrarily large body to buffer. Checked from Content-Length
-    before reading, so the body is never even pulled off the wire.
-    Chunked requests without Content-Length are guarded while they are
-    being read; the counter trips mid-stream and aborts.
+    The largest legit payload here is a few hundred bytes: a 6-char
+    solution, a JWT, an action name. Without a ceiling anybody could
+    hand uvicorn an arbitrarily large body to buffer. Content-Length
+    is checked before reading anything, so oversized bodies are
+    rejected without ever coming off the wire. Chunked requests (no
+    Content-Length) are instead counted while reading, and the
+    counter aborts mid-stream when it trips.
     """
 
     def __init__(self, app, max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES) -> None:
@@ -49,11 +49,11 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 class _ClampedBodyRequest:
-    """Request wrapper whose body stream truncates at the limit.
+    """Request wrapper whose body stream aborts at the limit.
 
-    We don't truncate silently — the wrapped stream over-reads by one
-    chunk and then raises, which surfaces as a 413 via the normal
-    exception path (validation reads run inside route handling).
+    It doesn't truncate. The wrapped stream reads one chunk too many,
+    raises, and the error surfaces as a 413 through the normal
+    exception paths while the route is still consuming the body.
     """
 
     def __init__(self, request: Request, max_body_bytes: int) -> None:

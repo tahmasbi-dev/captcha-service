@@ -90,7 +90,7 @@ async def solve_challenge(
     "/internal/verify",
     response_model=VerifyTokenResponse,
     responses={401: _ERRORS[401], 400: _ERRORS[400]},
-    summary="Verify a solve token (internal — requires X-Internal-Key)",
+    summary="Verify a solve token (internal; requires X-Internal-Key)",
     tags=["internal"],
     dependencies=[InternalOnly],
 )
@@ -116,8 +116,8 @@ async def verify_token(
 async def health(request: Request, redis: RedisDep) -> Response:
     """Liveness with substance: pings Redis and reports Lua script state.
 
-    503 when Redis is unreachable — a captcha service without its store
-    cannot do its job, so we fail loud rather than claim ok.
+    503 when Redis is unreachable. A captcha service with no store
+    can't do its job, so we'd rather fail loud than claim ok.
     """
     report = await observability.redis_healthcheck(redis)
     if not report["redis_up"]:
@@ -141,8 +141,8 @@ async def metrics(request: Request, redis: RedisDep) -> Response:
     """Prometheus scrape endpoint.
 
     Latency histograms, redeem outcomes, solve right/wrong, stale CAS
-    writes, Redis errors, and a fresh read of the expiry-queue size are
-    all stateless instrument reads or one cheap ZCARD.
+    writes, Redis errors, and a fresh read of the expiry queue. All
+    stateless instrument reads or one cheap ZCARD.
     """
     await observability.refresh_expiry_gauge(redis)
     payload, content_type = observability.render_metrics()
@@ -161,10 +161,10 @@ async def challenge_image(
     request: Request,
     use_cases: UseCasesDep,
 ) -> Response:
-    """Raw bytes instead of a base64 data URL — one third lighter and the
-    browser renders it directly. The image is immutable for the life of
-    the challenge, so the challenge id doubles as the ETag and a matching
-    If-None-Match gets a free 304."""
+    """Raw PNG bytes instead of a base64 data URL: a third lighter, and
+    the browser renders it directly. The image never changes for the
+    life of the challenge, so the challenge id works as the ETag and a
+    matching If-None-Match gets a cheap 304."""
     payload = await use_cases.get_challenge_image.execute(challenge_id)
     etag = f'"{challenge_id}"'
     if request.headers.get("if-none-match") == etag:

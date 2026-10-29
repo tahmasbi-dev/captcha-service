@@ -19,7 +19,7 @@ class ChallengeId:
 
     @classmethod
     def new(cls) -> ChallengeId:
-        """Generate a fresh, unique identifier. Domain-side, not DB-side."""
+        """Generate a fresh identifier here in the domain, not at the DB."""
         return cls(uuid4())
 
     @classmethod

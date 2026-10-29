@@ -23,12 +23,12 @@ class InvalidProof(ChallengeError):
     """The Proof VO was constructed with invalid inputs."""
     
 class StaleChallenge(ChallengeError):
-    """The aggregate was modified concurrently; the caller must reload and decide.
+    """The aggregate was changed by someone else mid-flight.
 
-    Raised by the repository adapter when the optimistic-concurrency check
-    fails — i.e. the version stored in Redis no longer matches the version
-    the caller loaded. The entity's in-memory state is *not* authoritative;
-    it represents a write that lost the race and must be discarded.
+    Raised by the repository adapter when the optimistic-concurrency
+    check fails, i.e. the version in Redis no longer matches the one
+    the caller loaded. Whatever in-memory state the caller still holds
+    is a lost write and should be dropped, not retried as-is.
     """
 
     def __init__(self, challenge_id: ChallengeId) -> None:

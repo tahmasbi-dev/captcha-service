@@ -52,26 +52,26 @@ return tonumber(ARGV[2])
 """
 
 
-# One round trip, one decision, one write:
+# One round trip: read, decide, write.
 #
 #   KEYS[1] = challenge:{id}   (hash)
 #   KEYS[2] = challenge:expiry (sorted set)
 #
 #   ARGV[1] = action
 #   ARGV[2] = now (epoch seconds, float)
-#   ARGV[3] = solution sha256 hex (caller-computed; Lua never hashes)
-#   ARGV[4] = burn TTL seconds (post-transition TTL, ~= grace floor)
+#   ARGV[3] = solution sha256 hex (computed by the caller; Lua never hashes)
+#   ARGV[4] = burn TTL seconds (post-transition TTL, roughly the grace floor)
 #
-#   returns 0  — not found: no stored hash
-#   returns 1  — first correct answer: state -> solved (CAS v -> v+1)
-#   returns 2  — wrong answer / wrong action: state -> failed (CAS v -> v+1)
-#   returns 10 — already solved: NO write, NO version churn (idempotent retry)
-#   returns 20 — stored state already terminal (failed/expired)
-#   returns 30 — was issued but past expires_at: state -> expired (CAS)
+#   returns 0   not found, no stored hash
+#   returns 1   first correct answer, state -> solved (CAS v -> v+1)
+#   returns 2   wrong solution or action, state -> failed (CAS v -> v+1)
+#   returns 10  already solved, no write and no version churn (retry id)
+#   returns 20  stored state was already terminal (failed/expired)
+#   returns 30  was issued but past expires_at, state -> expired (CAS)
 #
-# Note the compare happens on stored VALUES inside the script, so the
-# read-modify-write window that previously spanned two network round
-# trips is gone: no command can slip between load and commit.
+# The compare runs against stored values inside the script itself, so
+# there is no read-modify-write window spanning two network round trips
+# and no command can slip in between load and commit.
 SOLVE_LUA = """
 local parts = redis.call('HMGET', KEYS[1],
   'id', 'state', 'action', 'solution_hash', 'version',
@@ -109,6 +109,13 @@ return 1
 
 
 class RedisChallengeRepository(ChallengeRepository):
+    """Redis adapter for the ChallengeRepository port.
+
+    Writes go through CAS Lua scripts so concurrent writers can't
+    corrupt the state machine, and the expiry sorted set doubles as
+    the find_due_for_expiry index.
+    """
+
     def __init__(
         self,
         redis: Redis,
@@ -142,12 +149,12 @@ class RedisChallengeRepository(ChallengeRepository):
         ttl_seconds = max(
             int((challenge.expires_at + self._grace - now).total_seconds()),
             int(self._grace.total_seconds()),
-            60,  # hard floor: never let a row die before the scheduler can see it
+            60,  # hard floor so a row can't die before the scheduler sees it
         )
 
-        # expires_at_ts mirrors the expiry zset score as a plain number so
-        # the solve script can compare against wall-clock without parsing
-        # ISO timestamps in Lua.
+        # expires_at_ts mirrors the expiry zset score as a plain number,
+        # so the solve script can compare against the wall clock instead
+        # of parsing ISO timestamps in Lua.
         fields = [
             "id",             str(challenge.id),
             "state",          challenge.state.value,
@@ -172,7 +179,7 @@ class RedisChallengeRepository(ChallengeRepository):
             ],
         )
         if int(result) == 0:
-            observability.record_stale_challenge()   # lost the race, worth counting
+            observability.record_stale_challenge()   # we lost the CAS race, worth counting
             raise StaleChallenge(challenge.id)
         challenge._version = new_version
 
@@ -190,7 +197,7 @@ class RedisChallengeRepository(ChallengeRepository):
                 action.value,                       # ARGV[1]
                 str(now.timestamp()),               # ARGV[2]
                 solution_sha256_hex,                # ARGV[3]
-                str(int(self._grace.total_seconds())),   # ARGV[4]: burn TTL
+                str(int(self._grace.total_seconds())),   # ARGV[4] burn TTL
             ],
         )
         code = int(result)
@@ -228,7 +235,7 @@ class RedisChallengeRepository(ChallengeRepository):
         orphans: list[str] = []
         for cid, data in zip(ids, results):
             if not data or data.get("state") != "issued":
-                orphans.append(cid)   # TTL'd hash or terminal state → drop from index
+                orphans.append(cid)   # hash expired or state is terminal, drop from index
                 continue
             challenges.append(self._to_domain(data))
 

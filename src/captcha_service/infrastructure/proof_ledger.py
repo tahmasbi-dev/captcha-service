@@ -16,9 +16,9 @@ from captcha_service.infrastructure import observability
 
 # Single-use redemption, one atomic operation:
 #
-#   KEYS[1] = challenge:{id}   (hash)   — owned by RedisChallengeRepository
-#   KEYS[2] = challenge:expiry (zset)   — owned by RedisChallengeRepository
-#   KEYS[3] = redemption:{id}  (hash)   — verdict record (the "answer on file")
+#   KEYS[1] = challenge:{id}   (hash)    written by RedisChallengeRepository
+#   KEYS[2] = challenge:expiry (zset)    written by RedisChallengeRepository
+#   KEYS[3] = redemption:{id}  (hash)    the verdict record ("answer on file")
 #
 #   ARGV[1] = action
 #   ARGV[2] = retention_seconds (record TTL)
@@ -26,10 +26,10 @@ from captcha_service.infrastructure import observability
 #   ARGV[4] = redeemed_at (UTC ISO)
 #   ARGV[5] = token_sha (sha256 hex of the presented token)
 #
-#   returns 0 — NOT_FOUND: no record, and the challenge is absent/not solved
-#   returns 1 — NEW: consumed now; verdict recorded, bound to this token
-#   returns 2 — REPLAY: same token retried; record granted once, then deleted
-#   returns 3 — CONFLICT: proof already consumed by a different token
+#   returns 0  NOT_FOUND, no record and the challenge is missing or not solved
+#   returns 1  NEW, consumed now, verdict recorded and bound to this token
+#   returns 2  REPLAY, same token retried, record handed out once and deleted
+#   returns 3  CONFLICT, the proof was already consumed by a different token
 REDEEM_LUA = """
 if redis.call('EXISTS', KEYS[3]) == 1 then
   if redis.call('HGET', KEYS[3], 'token_sha') == ARGV[5] then
@@ -53,18 +53,18 @@ return 1
 
 
 def _token_sha(token: str) -> str:
-    # Bind the verdict record to the exact token presented: the raw token
-    # is never stored, only its digest.
+    # The verdict record is bound to the exact token presented, but we
+    # store only its digest, never the token itself.
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class RedisProofLedger(ProofLedger):
     """Redis adapter for the ProofLedger port.
 
-    The record is the "answer kept for a short while": a resource server
-    that lost its connection retries with the same token and still gets
-    a success — exactly once. Afterwards the record is gone, so one
-    solved challenge can never fund a second pass.
+    The record is the "answer kept for a short while". A resource
+    server that dropped its connection retries with the same token and
+    still gets its success, exactly once; after that the record is
+    gone, so one solved challenge can never pay for a second pass.
     """
 
     def __init__(
