@@ -10,7 +10,15 @@ docker compose up -d --build
 
 That starts Redis and the API together. The API is on `http://127.0.0.1:8000`, Redis on `127.0.0.1:6379` — both bound to loopback only, so nothing is exposed to the LAN. Without Docker: `docker compose up -d redis`, then `uv sync && uv run uvicorn captcha_service.api.app:app --port 8000`.
 
-Settings come from `.env` (required: `CAPTCHA_INTERNAL_API_KEY` and `CAPTCHA_JWT_SECRET` — the app refuses to start without them).
+Settings come from `.env` (required: `CAPTCHA_INTERNAL_API_KEY` and `CAPTCHA_JWT_SECRET` — the app refuses to start without them). Shortcuts:
+
+```bash
+make up        # start the stack; creates .env with two fresh random secrets on first run
+make test      # pytest suite against the running Redis
+make metrics   # adds Prometheus + Grafana, dashboard pre-provisioned
+```
+
+`make metrics` brings the whole stack up with Prometheus scraping `/metrics` and Grafana at `http://127.0.0.1:3000` with the "CAPTCHA service" dashboard already provisioned — open it and the panels are live (anonymous viewer access, `admin`/`admin` if you want the full UI). The runbook at the bottom explains what to look at when something breaks.
 
 ## What it does, end to end
 
@@ -145,3 +153,25 @@ src/captcha_service/
 ```
 
 Swapping Redis for anything else means writing one adapter that keeps the `ChallengeRepository` and `ProofLedger` contracts; nothing above the ports changes.
+
+## Runbook
+
+For the on-call version of you. The dashboard (**make metrics** → Grafana) is the entry point; `curl http://127.0.0.1:8000/metrics` shows the same numbers when you don't want UI.
+
+**500s spike.** Three panels tell you almost everything:
+
+- `captcha_redis_errors_total` climbing → the store is the problem, not the app. Check `docker compose logs redis`, and `/health` (`lua_scripts` all true means script cache intact; all false means Redis was wiped/restarted recently — scripts reload automatically on next use, but check for data loss). The 500 shape follows the failure mode, so errors trend before the status count does.
+- `captcha_stale_challenge_writes_total` climbing without Redis errors → version races under load. Increase `uvicorn --workers` rather than scaling instances; the CAS is per-instance and safe while there's one Redis.
+- `captcha_stale_challenge_writes_total` flat, `captcha_http_request_duration_seconds_count{status="500"}` still climbing → a bug filed in app code reads the traceback through logs (JSON lines, `request_id` per request).
+
+**429s rule the traffic.** `captcha_http_request_duration_seconds_count{status="429"}` rate is the per-IP token bucket working. `captcha_challenges_awaiting_expiry` along with it means the attacker inflated the expiry index; the sweeper drains it (and `captcha_challenges_expired_total` grows at the same pace the sweeper runs). Tune the bucket through `CAPTCHA_CHALLENGE_RATE_MAX` / `CAPTCHA_SOLVE_RATE_MAX` if legit users are caught in it.
+
+**expiry index growth.** `captcha_challenges_awaiting_expiry` continuous growth means the sweeper is stuck or the challenge rate jumped. First check the sweeper's stderr via logs; if the service is just hot, it burns through eventually, since `limit` per sweep is bounded.
+
+**Verify (the internal endpoint), when your upstream calls you.** Outcome distribution is the panel to watch:
+
+- `captcha_redeem_outcomes_total{outcome="conflict"}` nonzero → someone replays a consumed proof with a re-minted token. The design makes it harmless (they get 400) but a sustained rate is an actual attack to log.
+- `outcome="replay"` small and bounded → the network-retry path. If it goes high, your upstream is flaky or retrying too aggressively.
+- `outcome="not_found"` spike → upstream presenting expired challenges (challenge TTL vs retry policy mismatch) or re-using ids.
+
+**Wrong-solve ratio.** `captcha_solve_results_total{result="wrong"}` trending steady-high with lower total issuance means the challenge is hard or OCRs weak. A *burst* of wrongs against specific ids followed by silence is someone probing — the answer-key burn means they lose the challenge each try.

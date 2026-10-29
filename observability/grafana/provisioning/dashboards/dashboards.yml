@@ -1,0 +1,10 @@
+apiVersion: 1
+
+providers:
+  - name: captcha-service
+    folder: ""
+    type: file
+    disableDeletion: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

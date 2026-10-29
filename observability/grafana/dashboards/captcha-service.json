@@ -1,0 +1,92 @@
+{
+  "title": "CAPTCHA service",
+  "uid": "captcha-overview",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["captcha-service"],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Solves per second (right vs wrong)",
+      "description": "Solve outcomes over five-minute windows. A persistently high wrong share is usually one attacker hammering a challenge before giving up — each wrong answer burns the challenge.",
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "options": { "legend": { "showLegend": true, "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(captcha_solve_results_total[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redeem outcomes per second",
+      "description": "Verify endpoint results. new = first successful verification, replay = the one allowed same-token network retry, conflict = a different token tried to reuse a consumed proof (someone attacking), not_found = nothing left to redeem.",
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "showLegend": true, "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(captcha_redeem_outcomes_total[5m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "429 rate-limit rejections (5m window)",
+      "description": "Requests rejected by the per-IP token bucket. Sustained nonzero here is rate limiting doing its job; a spike from a single IP is a scraper about to be blocked.",
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2 }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(captcha_http_request_duration_seconds_count{status=\"429\"}[5m])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis errors (5m rate)",
+      "description": "Failed Redis operations while serving requests. Anything nonzero is a problem: the service degrades to fail-closed challenges / fail-open rate limits depending on path.",
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "showLegend": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(captcha_redis_errors_total[5m])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Challenges awaiting expiry",
+      "description": "Size of the challenge:expiry sorted set — live challenges plus grace-window leftovers. Should stay small and flat; continuous growth means the sweeper is stuck or through-put jumped.",
+      "datasource": { "type": "prometheus", "uid": "prom" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "showLegend": false } },
+      "targets": [
+        { "refId": "A", "expr": "captcha_challenges_awaiting_expiry" }
+      ]
+    }
+  ]
+}
