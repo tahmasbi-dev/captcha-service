@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s        # short interval on purpose: demo dashboards feel live
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: captcha-api
+    metrics_path: /metrics
+    static_configs:
+      # `api` resolves inside the shared compose network (see the base file).
+      - targets: ["api:8000"]
