@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshot.png" alt="captcha-service dashboard" width="720" />
+  <img src="doc/screenshot.webp" alt="captcha-service dashboard" width="720" />
 </p>
 
 <h1 align="center">captcha-service</h1>
