@@ -1,6 +1,16 @@
-# captcha-service
+<p align="center">
+  <img src="docs/screenshot.png" alt="captcha-service dashboard" width="720" />
+</p>
 
-A self-contained CAPTCHA service: hands out image challenges, checks answers, and issues short-lived signed tokens that other servers redeem to prove a human solved a challenge. Runs with one command, keeps all its state in Redis, and never stores a solution in plain text.
+<h1 align="center">captcha-service</h1>
+
+<p align="center">
+  A self-contained CAPTCHA service: hands out image challenges, checks answers, and issues
+  short-lived signed tokens that other servers redeem to prove a human solved a challenge.
+  Runs with one command, keeps all its state in Redis, and never stores a solution in plain text.
+</p>
+
+> **Web demo:** [tahmasbi-dev/captcha-service-web](https://github.com/tahmasbi-dev/captcha-service-web) — a Next.js login form that exercises the full flow end to end (fetch challenge → solve → server-side verify).
 
 ## Running it
 
@@ -175,3 +185,9 @@ For the on-call version of you. The dashboard (**make metrics** → Grafana) is 
 - `outcome="not_found"` spike → upstream presenting expired challenges (challenge TTL vs retry policy mismatch) or re-using ids.
 
 **Wrong-solve ratio.** `captcha_solve_results_total{result="wrong"}` trending steady-high with lower total issuance means the challenge is hard or OCRs weak. A *burst* of wrongs against specific ids followed by silence is someone probing — the answer-key burn means they lose the challenge each try.
+
+---
+
+## Related repos
+
+- **[captcha-service-web](https://github.com/tahmasbi-dev/captcha-service-web-demo)** — the Next.js demo login form. Fetch a challenge, solve it, then have the login route redeem the token server-to-server with this service (`X-Internal-Key` + `/v1/internal/verify`). The fastest way to see the whole flow working.
