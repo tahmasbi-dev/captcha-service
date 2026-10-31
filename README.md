@@ -10,7 +10,7 @@
   Runs with one command, keeps all its state in Redis, and never stores a solution in plain text.
 </p>
 
-> **Live demo:** [in here](https://captcha-service-web-demo.vercel.app/) — a Next.js login form that exercises the full flow end to end (fetch challenge → solve → server-side verify).
+> **Live demo:** [in here](https://captcha-service-web-demo.vercel.app/) (username: **demo** - password: **demo**)— a Next.js login form that exercises the full flow end to end (fetch challenge → solve → server-side verify).
 
 ## Running it
 
