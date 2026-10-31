@@ -10,7 +10,7 @@
   Runs with one command, keeps all its state in Redis, and never stores a solution in plain text.
 </p>
 
-> **Web demo:** [tahmasbi-dev/captcha-service-web](https://github.com/tahmasbi-dev/captcha-service-web) — a Next.js login form that exercises the full flow end to end (fetch challenge → solve → server-side verify).
+> **Live demo:** [in here](https://captcha-service-web-demo.vercel.app/) — a Next.js login form that exercises the full flow end to end (fetch challenge → solve → server-side verify).
 
 ## Running it
 
