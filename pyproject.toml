@@ -6,10 +6,10 @@ readme = "README.md"
 authors = [
     { name = "tahmasbi-dev", email = "thebasedcoder@gmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = "==3.13.*"
 dependencies = [
     "captcha>=0.7.1",
-    "fastapi>=0.162.0",
+    "fastapi[standard]>=0.162.0",
     "prometheus-client>=0.26.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.2",
@@ -39,3 +39,6 @@ captcha-service = "captcha_service:main"
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.fastapi]
+entrypoint = "captcha_service.api.app:app"
